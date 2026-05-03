@@ -1,0 +1,41 @@
+import { AppActions } from "../App";
+import { PageKey } from "../components/Sidebar";
+import { AppData } from "../types";
+import { Dashboard } from "../pages/Dashboard";
+import { ImportQuestions } from "../pages/ImportQuestions";
+import { PatientRecord } from "../pages/PatientRecord";
+import { Pharmacy } from "../pages/Pharmacy";
+import { MedicationsAdmin } from "../pages/MedicationsAdmin";
+import { QuestionBank } from "../pages/QuestionBank";
+import { QuestionEditor } from "../pages/QuestionEditor";
+import { Reception } from "../pages/Reception";
+import { RegistrationCenter } from "../pages/RegistrationCenter";
+import { PatientsAdmin } from "../pages/PatientsAdmin";
+import { Reviews } from "../pages/Reviews";
+import { Settings } from "../pages/Settings";
+import { Statistics } from "../pages/Statistics";
+import { StudyShift } from "../pages/StudyShift";
+import { TreatmentPlan } from "../pages/TreatmentPlan";
+import { Triage } from "../pages/Triage";
+import { Wards } from "../pages/Wards";
+
+export function AppRoutes({ data, actions, page, selectedPatientId, selectedQuestionId, medicationTopic, userId, offlineMode }: { data: AppData; actions: AppActions; page: PageKey; selectedPatientId?: string; selectedQuestionId?: string; medicationTopic?: string; userId?: string; offlineMode?: boolean }) {
+  const props = { data, actions };
+  if (page === "dashboard") return <Dashboard {...props} offlineMode={Boolean(offlineMode)} />;
+  if (page === "treatment-plan") return <TreatmentPlan {...props} />;
+  if (page === "reception") return <Reception {...props} />;
+  if (page === "triage") return <Triage {...props} selectedPatientId={selectedPatientId} />;
+  if (page === "wards") return <Wards {...props} />;
+  if (page === "study-shift") return <StudyShift {...props} />;
+  if (page === "pharmacy") return <Pharmacy {...props} initialTopic={medicationTopic} userId={userId} />;
+  if (page === "registration-center") return <RegistrationCenter {...props} />;
+  if (page === "patients-admin") return <PatientsAdmin {...props} userId={userId} />;
+  if (page === "medications-admin") return <MedicationsAdmin {...props} userId={userId} />;
+  if (page === "question-bank") return <QuestionBank {...props} />;
+  if (page === "question-editor") return <QuestionEditor {...props} selectedQuestionId={selectedQuestionId} userId={userId} />;
+  if (page === "import-questions") return <ImportQuestions {...props} />;
+  if (page === "patient-record") return <PatientRecord {...props} selectedPatientId={selectedPatientId} />;
+  if (page === "reviews") return <Reviews {...props} />;
+  if (page === "statistics") return <Statistics {...props} />;
+  return <Settings {...props} />;
+}
