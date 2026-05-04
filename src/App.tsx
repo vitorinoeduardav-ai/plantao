@@ -21,7 +21,7 @@ import { calculateCureIndex } from "./utils/calculateCureIndex";
 import { classifyPatient } from "./utils/classifyPatient";
 import { nowIso } from "./utils/dateUtils";
 import { createPatientsFromQuestions, mergeQuestions } from "./utils/importExport";
-import { loadData, resetData, saveData } from "./utils/storage";
+import { getInitialData, loadData, resetData, saveData } from "./utils/storage";
 import { scheduleNextReview } from "./utils/scheduleNextReview";
 import { generateStudyPlan } from "./utils/studyPlan";
 import { mergeEconomyExamPackage } from "./utils/economyPackageMerge";
@@ -44,10 +44,12 @@ export type AppActions = {
 };
 
 export default function App() {
-  const [localSnapshot] = useState<AppData>(() => loadData());
-  const [data, setData] = useState<AppData>(localSnapshot);
+  const [localSnapshot, setLocalSnapshot] = useState<AppData>(() => getInitialData());
+  const [data, setData] = useState<AppData>(() => getInitialData());
+  const [localDataReady, setLocalDataReady] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(isSupabaseConfigured);
+  const [authError, setAuthError] = useState("");
   const [offlineMode, setOfflineMode] = useState(!isSupabaseConfigured);
   const [syncStatus, setSyncStatus] = useState<"idle" | "syncing" | "synced" | "error">("idle");
   const [page, setPage] = useState<PageKey>("dashboard");
@@ -138,24 +140,38 @@ export default function App() {
   }
 
   useEffect(() => {
-    setData((current) => mergeEconomyExamPackage(current));
+    const stored = mergeEconomyExamPackage(loadData());
+    setLocalSnapshot(stored);
+    setData(stored);
+    setLocalDataReady(true);
   }, []);
-  useEffect(() => saveData(data), [data]);
+  useEffect(() => {
+    if (localDataReady) saveData(data);
+  }, [data, localDataReady]);
   useEffect(() => {
     if (!isSupabaseConfigured) {
       setAuthLoading(false);
       return;
     }
-    supabase.auth.getSession().then(async ({ data: sessionData }) => {
-      const nextUser = sessionData.session?.user || null;
-      setUser(nextUser);
-      if (nextUser) await loadRemoteData(nextUser.id);
-      setAuthLoading(false);
-    });
+    supabase.auth.getSession()
+      .then(async ({ data: sessionData }) => {
+        const nextUser = sessionData.session?.user || null;
+        setUser(nextUser);
+        if (nextUser) await loadRemoteData(nextUser.id);
+      })
+      .catch((error) => {
+        console.error(error);
+        setAuthError("Nao foi possivel conectar ao Supabase agora. Voce pode tentar novamente ou usar o modo offline.");
+        setSyncStatus("error");
+      })
+      .finally(() => setAuthLoading(false));
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       const nextUser = session?.user || null;
       setUser(nextUser);
-      if (nextUser) void loadRemoteData(nextUser.id);
+      if (nextUser) void loadRemoteData(nextUser.id).catch((error) => {
+        console.error(error);
+        setAuthError("Login feito, mas nao foi possivel carregar os dados da nuvem agora.");
+      });
     });
     return () => listener.subscription.unsubscribe();
   }, []);
@@ -331,7 +347,7 @@ export default function App() {
   }
 
   if (!offlineMode && !user) {
-    return <AuthPage supabaseConfigured={isSupabaseConfigured} onOffline={() => setOfflineMode(true)} onAuthenticated={async () => {
+    return <AuthPage supabaseConfigured={isSupabaseConfigured} initialMessage={authError} onOffline={() => setOfflineMode(true)} onAuthenticated={async () => {
       const { data: userData } = await supabase.auth.getUser();
       setUser(userData.user);
       if (userData.user) await loadRemoteData(userData.user.id);
