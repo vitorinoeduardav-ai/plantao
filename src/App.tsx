@@ -16,6 +16,7 @@ import { theoryService } from "./services/theoryService";
 import { examService } from "./services/examService";
 import { studyPlanService } from "./services/studyPlanService";
 import { syncEconomyExamPackage } from "./services/economyPackageService";
+import { hasSyncConflicts, migrateLocalDataToCloud, summarizeSyncConflicts, SyncConflictMode } from "./services/syncService";
 import { calculateCureIndex } from "./utils/calculateCureIndex";
 import { classifyPatient } from "./utils/classifyPatient";
 import { nowIso } from "./utils/dateUtils";
@@ -43,10 +44,12 @@ export type AppActions = {
 };
 
 export default function App() {
-  const [data, setData] = useState<AppData>(() => loadData());
+  const [localSnapshot] = useState<AppData>(() => loadData());
+  const [data, setData] = useState<AppData>(localSnapshot);
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(isSupabaseConfigured);
   const [offlineMode, setOfflineMode] = useState(!isSupabaseConfigured);
+  const [syncStatus, setSyncStatus] = useState<"idle" | "syncing" | "synced" | "error">("idle");
   const [page, setPage] = useState<PageKey>("dashboard");
   const [selectedPatientId, setSelectedPatientId] = useState<string | undefined>();
   const [selectedQuestionId, setSelectedQuestionId] = useState<string | undefined>();
@@ -54,7 +57,7 @@ export default function App() {
 
   const userId = user?.id;
 
-  async function loadRemoteData(nextUserId: string) {
+  async function fetchRemoteData(nextUserId: string): Promise<AppData> {
     await initializeUserData(nextUserId);
     await syncEconomyExamPackage(nextUserId);
     const [patients, questions, medications, attempts, settings, exams, dailyStudyPlan] = await Promise.all([
@@ -71,7 +74,67 @@ export default function App() {
       attempts: attempts.filter((attempt) => attempt.patientId === patient.id),
       recommendedMedications: Array.from(new Set(attempts.filter((attempt) => attempt.patientId === patient.id).map(() => patient.name))),
     }));
-    setData(mergeEconomyExamPackage({ patients, questions, medications, records, settings, exams, dailyStudyPlan }));
+    return mergeEconomyExamPackage({ patients, questions, medications, records, settings, exams, dailyStudyPlan });
+  }
+
+  async function loadRemoteData(nextUserId: string) {
+    setSyncStatus("syncing");
+    try {
+      const remoteData = await fetchRemoteData(nextUserId);
+      setData(remoteData);
+      setSyncStatus("synced");
+      return remoteData;
+    } catch (error) {
+      setSyncStatus("error");
+      throw error;
+    }
+  }
+
+  async function syncNow() {
+    if (!userId) return;
+    await loadRemoteData(userId).catch(console.error);
+  }
+
+  async function migrateLocalSnapshot() {
+    if (!userId) return;
+    setSyncStatus("syncing");
+    try {
+      const cloud = await fetchRemoteData(userId);
+      const conflicts = summarizeSyncConflicts(localSnapshot, cloud);
+      let mode: SyncConflictMode = "merge";
+      if (hasSyncConflicts(conflicts)) {
+        const answer = window.prompt(
+          [
+            "Foram encontrados conflitos entre dados locais e dados da nuvem.",
+            `Pacientes: ${conflicts.patients}`,
+            `Questões: ${conflicts.questions}`,
+            `Medicamentos: ${conflicts.medications}`,
+            `Provas: ${conflicts.exams}`,
+            `Plano: ${conflicts.studyPlan}`,
+            conflicts.settings ? "Configurações: diferentes" : "Configurações: sem conflito",
+            "",
+            "Digite uma opção:",
+            "local = manter versão local",
+            "nuvem = manter versão da nuvem",
+            "mesclar = mesclar dados",
+          ].join("\n"),
+          "mesclar",
+        );
+        if (answer === null) {
+          setSyncStatus("idle");
+          return;
+        }
+        const normalized = answer.trim().toLowerCase();
+        mode = normalized === "local" ? "local" : normalized === "nuvem" || normalized === "cloud" ? "cloud" : "merge";
+      }
+      await migrateLocalDataToCloud(userId, localSnapshot, cloud, mode);
+      await loadRemoteData(userId);
+      window.alert("Dados locais migrados para a nuvem. Agora tablet e notebook podem usar a mesma conta.");
+    } catch (error) {
+      setSyncStatus("error");
+      console.error(error);
+      window.alert("Não foi possível migrar os dados agora. Confira sua conexão e tente novamente.");
+    }
   }
 
   useEffect(() => {
@@ -196,11 +259,17 @@ export default function App() {
           missedReviewPenaltyAt: undefined,
           updatedAt: nowIso(),
         };
+        const attemptId = `attempt-${crypto.randomUUID()}`;
         const attempt: PatientAttempt = {
-          id: `attempt-${crypto.randomUUID()}`,
+          id: attemptId,
           patientId,
           date: nowIso(),
-          responses,
+          responses: responses.map((response) => ({
+            ...response,
+            patientId,
+            answeredAt: response.answeredAt || nowIso(),
+            triageAttemptId: attemptId,
+          })),
           cureIndex,
           previousStatus: patient.status,
           newStatus,
@@ -281,6 +350,9 @@ export default function App() {
       })}
       userEmail={user?.email}
       offlineMode={offlineMode}
+      syncStatus={syncStatus}
+      onSyncNow={userId ? syncNow : undefined}
+      onMigrateLocal={userId ? migrateLocalSnapshot : undefined}
       onSignOut={offlineMode ? () => setOfflineMode(false) : async () => { await authSignOut(); setUser(null); setPage("dashboard"); }}
     >
       <AppRoutes data={data} actions={actions} page={page} selectedPatientId={selectedPatientId} selectedQuestionId={selectedQuestionId} medicationTopic={medicationTopic} userId={userId} offlineMode={offlineMode} />
